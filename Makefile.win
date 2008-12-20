@@ -1,0 +1,54 @@
+# Project: SDLTester
+# Makefile created by Dev-C++ 4.9.9.2
+
+CPP  = g++.exe
+CC   = gcc.exe
+WINDRES = windres.exe
+RES  = 
+OBJ  = sdl_main.o spacew.o ship.o bullet.o stars.o hash.o particles.o obstacle.o coreutils.o $(RES)
+LINKOBJ  = sdl_main.o spacew.o ship.o bullet.o stars.o hash.o particles.o obstacle.o coreutils.o $(RES)
+LIBS =  -lmingw32 -lopengl32 -lglu32 -lSDLmain -lSDL -lSDL_mixer  
+INCS = 
+CXXINCS = 
+BIN  = SDLTester.exe
+CXXFLAGS = $(CXXINCS)   -std=c99 -ansi
+CFLAGS = $(INCS) -std=c99   -std=c99 -ansi
+RM = rm -f
+
+.PHONY: all all-before all-after clean clean-custom
+
+all: all-before SDLTester.exe all-after
+
+
+clean: clean-custom
+	${RM} $(OBJ) $(BIN)
+
+$(BIN): $(OBJ)
+	$(CC) $(LINKOBJ) -o "SDLTester.exe" $(LIBS)
+
+sdl_main.o: sdl_main.c spacew.h hash.h
+	$(CC) -c sdl_main.c -o sdl_main.o $(CFLAGS)
+
+spacew.o: spacew.c coreutils.h spacew.h hash.h ship.h stars.h obstacle.h
+	$(CC) -c spacew.c -o spacew.o $(CFLAGS)
+
+ship.o: ship.c 
+	$(CC) -c ship.c -o ship.o $(CFLAGS)
+
+bullet.o: bullet.c 
+	$(CC) -c bullet.c -o bullet.o $(CFLAGS)
+
+stars.o: stars.c coreutils.h stars.h
+	$(CC) -c stars.c -o stars.o $(CFLAGS)
+
+hash.o: hash.c hash.h
+	$(CC) -c hash.c -o hash.o $(CFLAGS)
+
+particles.o: particles.c coreutils.h particles.h
+	$(CC) -c particles.c -o particles.o $(CFLAGS)
+
+obstacle.o: obstacle.c 
+	$(CC) -c obstacle.c -o obstacle.o $(CFLAGS)
+
+coreutils.o: coreutils.c coreutils.h
+	$(CC) -c coreutils.c -o coreutils.o $(CFLAGS)
