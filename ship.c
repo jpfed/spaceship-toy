@@ -2,7 +2,6 @@
 #include <SDL/SDL.h>
 #include <SDL/SDL_opengl.h>
 #include "coreutils.h"
-#include "universe.h"
 #include "spacew.h"
 #include "ship.h"
 #include "bullet.h"
@@ -42,16 +41,19 @@ void shipDraw(struct GameObject *go) {
 			glVertex2d(SHIP_SIZE*1.5,0.0);
 			glEnd();
 		}
-		if (ship->turnRight) {
-			glColor3d(1,1,1);
+		double turnIntensity = (ship->currentTorque>0?ship->currentTorque:-ship->currentTorque);
+		turnIntensity = pow(turnIntensity,0.5);
+		turnIntensity = (turnIntensity>1.0?1.0:turnIntensity);
+		if (ship->currentTorque < 0) {
+			glColor4d(1,1,1, turnIntensity);
 			glBegin(GL_POLYGON);
 			glVertex2d(SHIP_SIZE/2,SHIP_SIZE/6);
 			glVertex2d(SHIP_SIZE/4,SHIP_SIZE*2/3);
 			glVertex2d(0,SHIP_SIZE/3);
 			glEnd();
 		}
-		if (ship->turnLeft) {
-			glColor3d(1,1,1);
+		if (ship->currentTorque > 0) {
+			glColor4d(1,1,1, turnIntensity);
 			glBegin(GL_POLYGON);
 			glVertex2d(SHIP_SIZE/2,-SHIP_SIZE/6);
 			glVertex2d(0,-SHIP_SIZE/3);
@@ -77,20 +79,70 @@ void shipDraw(struct GameObject *go) {
 void shipSimulate(struct GameObject *go, double dt) {
 	if (go->type == SHIP) {
 		struct Ship *ship = (struct Ship *)(go->objData);
+		struct ParticleSystem *eps=(struct ParticleSystem *)(ship->engines->objData);
+		struct ParticleSystem *rps=(struct ParticleSystem *)(ship->rengines->objData);
+		struct Pair targVel;
+		double dotProduct, worstDotProduct, bestDotProduct, fthrust, rthrust;
+		bestDotProduct = (ship->warpLimit)*(ship->warpLimit);
+		worstDotProduct = -bestDotProduct;
+		targVel.x = (ship->warpLimit)*cos(CONVERT_TO_RAD*go->angle);
+		targVel.y = (ship->warpLimit)*sin(CONVERT_TO_RAD*go->angle);
+		dotProduct = targVel.x*go->vel.x + targVel.y*go->vel.y;
+		rthrust = (dotProduct-worstDotProduct)/(bestDotProduct-worstDotProduct);
+		fthrust = 1-rthrust;
+		if (ship->thrusters) {
+			eps->overallFade = 1.0;
+			eps->intensity=0.9*pow( fthrust, 0.5 );
+			go->force.x+=fthrust*(ship->speed)*cos(CONVERT_TO_RAD*go->angle)*go->mass;
+			go->force.y+=fthrust*(ship->speed)*sin(CONVERT_TO_RAD*go->angle)*go->mass;
+		} else {
+			eps->overallFade=0.75;
+		}
+		
+		if (ship->retro) {
+			rps->overallFade = 1.0;
+			rps->intensity=0.9*pow( rthrust, 0.5 );
+			go->force.x-=rthrust*(ship->speed)*cos(CONVERT_TO_RAD*go->angle)*go->mass;
+			go->force.y-=rthrust*(ship->speed)*sin(CONVERT_TO_RAD*go->angle)*go->mass;
+		} else {
+			rps->overallFade=0.75;
+		}
+		
+		double targetAngVel = 0;
+		ship->currentTorque = 0;
+		if (!ship->tempInvince) {
+			if (ship->turnLeft) targetAngVel += ship->turnSpeed;
+			if (ship->turnRight) targetAngVel += -ship->turnSpeed;
+			ship->currentTorque = (targetAngVel - go->angVel) * go->moi/dt;
+			go->torque += ship->currentTorque;
+		}
+		 
+		if (ship->firingBullet) {
+			if (ship->heat == 0) {
+				struct GameObject *bo = initBullet();
+				struct Bullet *bullet = (struct Bullet *)bo->objData;
+				double firingXVel = (bullet->speed)*cos(CONVERT_TO_RAD*go->angle);
+				double firingYVel = (bullet->speed)*sin(CONVERT_TO_RAD*go->angle);
+
+				bo->vel.x = go->vel.x + firingXVel;
+				bo->vel.y = go->vel.y + firingYVel;
+			
+				bo->pos.x = go->pos.x + SHIP_SIZE*cos(CONVERT_TO_RAD*go->angle);
+				bo->pos.y = go->pos.y + SHIP_SIZE*sin(CONVERT_TO_RAD*go->angle);
+				
+				go->force.x	+= (go->vel.x-bo->vel.x)*bo->mass/dt;
+				go->force.y	+= (go->vel.y-bo->vel.y)*bo->mass/dt;
+				
+				ship->heat+=5;
+				hashAdd(gameObjects,(void*)bo);
+			}
+		}
+		
 		double vel = sqrt((go->vel.x)*(go->vel.x)+(go->vel.y)*(go->vel.y));
 		if (vel > ship->warpLimit) {
 			go->vel.x*=ship->warpLimit/vel;
 			go->vel.y*=ship->warpLimit/vel;
 		}
-		if (ship->firingBullet != NULL) {
-			go->force.x	+= (go->vel.x-ship->firingBullet->vel.x)*ship->firingBullet->mass/dt;
-			go->force.y	+= (go->vel.y-ship->firingBullet->vel.y)*ship->firingBullet->mass/dt;
-			ship->firingBullet=NULL;
-		}
-		if (!ship->tempInvince)
-			go->torque += (ship->targetAngVel - go->angVel) * go->moi/dt;
-		
-		
 		
 		ship->engines->angle = go->angle;
 		ship->rengines->angle = 180+go->angle;
@@ -102,9 +154,47 @@ void shipSimulate(struct GameObject *go, double dt) {
 		ship->rengines->pos.y+=sin(CONVERT_TO_RAD*go->angle)*SHIP_SIZE;
 		ship->engines->vel = go->vel;
 		ship->rengines->vel = go->vel;
-		
 		ship->tractorBeam->pos = go->pos;
+		
+		if (ship->engageTractor) { 
+			if (!ship->tractor) {
+				struct GameObject *other, *bestOther;
+				bestOther = NULL;
+				struct HashElement *cursor = NULL;
+				int i;
+				struct Pair vect;
+				double dist, bestDist;
+				bestDist = RAND_MAX;
+				for (i=0;i<gameObjects->numBuckets;i++) {
+					cursor = gameObjects->buckets[i].head;
+					while(cursor!=NULL) {
+						other = ((GP)(cursor->obj));
+						if ((other->type != BULLET) && other->phased<=0) {
+							vect.x = other->pos.x - go->pos.x;
+							vect.y = other->pos.y - go->pos.y;
+							dist = getLength(vect);
+							if (dist<bestDist && dist > 2*SHIP_SIZE) {
+								bestDist = dist;
+								bestOther = other;	
+							}
+						}
+						cursor = cursor->next;
+					}
+				}
+				ship->tractorLength = bestDist;
+				ship->tractoredObject = bestOther;
+				ship->tractor = bestOther!=NULL;
+			}
+		}
+	
 		struct ParticleSystem *tps=(struct ParticleSystem *)(ship->tractorBeam->objData);
+	
+		if (ship->releaseTractor) {
+			ship->tractor = 0;
+			ship->tractoredObject = NULL;
+			tps->overallFade = 0.75;
+		}
+		
 		if (ship->tractoredObject!=NULL) {
 			struct Pair vect, nvect, fvect;
 			
@@ -146,107 +236,20 @@ void shipSimulate(struct GameObject *go, double dt) {
 void shipInput(struct GameObject *go, Uint8 *keys) {
 	if (go->type == SHIP) {
 		struct Ship *ship = (struct Ship *)(go->objData);
-		struct ParticleSystem *eps=(struct ParticleSystem *)(ship->engines->objData);
-		struct ParticleSystem *rps=(struct ParticleSystem *)(ship->rengines->objData);
-		struct Pair targVel;
-		double dotProduct, worstDotProduct, bestDotProduct, fthrust, rthrust;
-		bestDotProduct = (ship->warpLimit)*(ship->warpLimit);
-		worstDotProduct = -bestDotProduct;
-		targVel.x = (ship->warpLimit)*cos(CONVERT_TO_RAD*go->angle);
-		targVel.y = (ship->warpLimit)*sin(CONVERT_TO_RAD*go->angle);
-		dotProduct = targVel.x*go->vel.x + targVel.y*go->vel.y;
-		rthrust = (dotProduct-worstDotProduct)/(bestDotProduct-worstDotProduct);
-		fthrust = 1-rthrust;
-		if (keys[SDLK_UP]) {
-			eps->overallFade = 1.0;
-			eps->intensity=0.9*pow( fthrust, 0.5 );
-			go->force.x+=fthrust*(ship->speed)*cos(CONVERT_TO_RAD*go->angle)*go->mass;
-			go->force.y+=fthrust*(ship->speed)*sin(CONVERT_TO_RAD*go->angle)*go->mass;
-			ship->thrusters = (fthrust > 0.125);
-		} else {
-			eps->overallFade=0.75;
-			ship->thrusters=0;
-		}
+
 		
-		if (keys[SDLK_DOWN]) {
-			rps->overallFade = 1.0;
-			rps->intensity=0.9*pow( rthrust, 0.5 );
-			go->force.x-=rthrust*(ship->speed)*cos(CONVERT_TO_RAD*go->angle)*go->mass;
-			go->force.y-=rthrust*(ship->speed)*sin(CONVERT_TO_RAD*go->angle)*go->mass;
-			ship->retro = (rthrust > 0.125);
-		} else {
-			rps->overallFade=0.75;
-			ship->retro = 0;
-		}
+		ship->thrusters = keys[SDLK_UP];
+		ship->retro = keys[SDLK_DOWN];
+		
 		ship->turnLeft = 0;
 		ship->turnRight = 0;
-		ship->targetAngVel = 0.0;
-		if (!ship->tempInvince) {
-			if (keys[SDLK_LEFT]) 
-				ship->targetAngVel = ship->turnSpeed;
-			if (keys[SDLK_RIGHT])
-				ship->targetAngVel = -ship->turnSpeed;
-			if (ship->targetAngVel - go->angVel > 0.25)
-				ship->turnLeft = 1;
-			if (ship->targetAngVel - go->angVel < -0.25)
-				ship->turnRight = 1;
-		}
-		 
-		if (keys[SDLK_SPACE]) {
-			if (ship->heat == 0) {
-				struct GameObject *bo = initBullet();
-				struct Bullet *bullet = (struct Bullet *)bo->objData;
-				double firingXVel = (bullet->speed)*cos(CONVERT_TO_RAD*go->angle);
-				double firingYVel = (bullet->speed)*sin(CONVERT_TO_RAD*go->angle);
+		ship->turnLeft = (keys[SDLK_LEFT]); 
+		ship->turnRight = (keys[SDLK_RIGHT]);
 
-				bo->vel.x = go->vel.x + firingXVel;
-				bo->vel.y = go->vel.y + firingYVel;
-			
-				bo->pos.x = go->pos.x + SHIP_SIZE*cos(CONVERT_TO_RAD*go->angle);
-				bo->pos.y = go->pos.y + SHIP_SIZE*sin(CONVERT_TO_RAD*go->angle);
-				
-				ship->firingBullet = bo;
-				
-				ship->heat+=5;
-				hashAdd(gameObjects,(void*)bo);
-			}
-		}
+		ship->firingBullet = keys[SDLK_SPACE];
 		
-		if (keys[SDLK_v]) {
-			if (!ship->tractor) {
-				struct GameObject *other, *bestOther;
-				bestOther = NULL;
-				struct HashElement *cursor = NULL;
-				int i;
-				struct Pair vect;
-				double dist, bestDist;
-				bestDist = RAND_MAX;
-				for (i=0;i<gameObjects->numBuckets;i++) {
-					cursor = gameObjects->buckets[i].head;
-					while(cursor!=NULL) {
-						other = ((GP)(cursor->obj));
-						if ((other->type != BULLET) && other->phased<=0) {
-							vect.x = other->pos.x - go->pos.x;
-							vect.y = other->pos.y - go->pos.y;
-							dist = getLength(vect);
-							if (dist<bestDist && dist > 2*SHIP_SIZE) {
-								bestDist = dist;
-								bestOther = other;	
-							}
-						}
-						cursor = cursor->next;
-					}
-				}
-				ship->tractorLength = bestDist;
-				ship->tractoredObject = bestOther;
-				ship->tractor = bestOther!=NULL;
-			}
-		}
-		else {
-			ship->tractor = 0;
-			ship->tractoredObject = NULL;
-		}
-		
+		ship->engageTractor = (keys[SDLK_v] && !ship->tractor);
+		ship->releaseTractor = !keys[SDLK_v];
 	}
 }
 
@@ -266,13 +269,16 @@ struct GameObject *initShip() {
 	ship->speed = 3;
 	ship->warpLimit = 6;
 	ship->turnSpeed = 500;
+	ship->firingBullet = 0;
 	ship->heat = 0;
 	ship->tempInvince = 0;
 	ship->thrusters = 0;
 	ship->retro = 0;
 	ship->turnLeft = 0;
 	ship->turnRight = 0;
-	ship->targetAngVel = 0.0;
+	ship->currentTorque = 0.0;
+	ship->engageTractor = 0;
+	ship->releaseTractor = 0;
 	ship->tractor = 0;
 	ship->tractorLength = 0.0;
 	ship->tractoredObject = NULL;
