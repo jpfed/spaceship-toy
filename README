@@ -1,0 +1,28 @@
+Spaceship-toy
+
+Fly around and shoot objects (or your own bullets, or yourself).  
+Engage the tractor beam to manipulate objects at a distance.  
+Writhe in existential despair as you realize that the entire 
+universe is a topologically-toroidal prison populated only by 
+you and inanimate objects.
+
+Todo
+	internal cleanup
+		replace lots of mallocs and frees with object pools
+		rename Pair struct and add more functions to manipulate them
+		replace gameObjects table with a few more specialized tables
+		ensure that collision code has no sign errors
+	features
+		new kinds of weapons
+		allow user to select different weapons
+		make "obstacle" and "ship" vulnerable to damage and "killable"
+		enemies that actively attack you
+		
+Future directions
+	sound for thrusting/shooting/collisions/explosions
+	hot seat multiplayer
+	splash screen
+	settings screens
+		control mapping
+		video settings
+		audio settings
